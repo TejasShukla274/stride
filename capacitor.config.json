@@ -1,0 +1,11 @@
+{
+  "appId": "app.stride.runner",
+  "appName": "Stride",
+  "webDir": "dist",
+  "backgroundColor": "#000000",
+  "android": { "allowMixedContent": false },
+  "plugins": {
+    "SplashScreen": { "launchShowDuration": 600, "launchAutoHide": false, "backgroundColor": "#000000", "showSpinner": false },
+    "StatusBar": { "style": "DARK", "backgroundColor": "#000000", "overlaysWebView": false }
+  }
+}

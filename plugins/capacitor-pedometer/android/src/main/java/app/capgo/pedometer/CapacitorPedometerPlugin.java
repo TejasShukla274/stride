@@ -1,0 +1,340 @@
+package app.capgo.pedometer;
+
+import android.Manifest;
+import android.content.Context;
+import android.content.pm.PackageManager;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
+import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import androidx.annotation.Nullable;
+import com.getcapacitor.JSObject;
+import com.getcapacitor.PermissionState;
+import com.getcapacitor.Plugin;
+import com.getcapacitor.PluginCall;
+import com.getcapacitor.PluginMethod;
+import com.getcapacitor.annotation.CapacitorPlugin;
+import com.getcapacitor.annotation.Permission;
+import com.getcapacitor.annotation.PermissionCallback;
+
+@CapacitorPlugin(
+    name = "CapacitorPedometer",
+    permissions = {
+        @Permission(strings = { Manifest.permission.ACTIVITY_RECOGNITION }, alias = "activityRecognition"),
+        @Permission(strings = { Manifest.permission.POST_NOTIFICATIONS }, alias = "notifications")
+    }
+)
+public class CapacitorPedometerPlugin extends Plugin implements SensorEventListener {
+
+    private final String pluginVersion = "8.0.45";
+    private static final String PERMISSION_GRANTED = "granted";
+    private static final String PERMISSION_DENIED = "denied";
+    private static final String PERMISSION_PROMPT = "prompt";
+    private static final String PERMISSION_PROMPT_WITH_RATIONALE = "prompt-with-rationale";
+
+    @Nullable
+    private SensorManager sensorManager;
+
+    @Nullable
+    private Sensor stepCounter;
+
+    private int initialStepCount = -1;
+    private int currentStepCount = 0;
+    // STRIDE CHANGE: absolute step total since device boot, so the app can keep a daily count across restarts.
+    private long lastTotal = -1;
+    private long measurementStartTime = 0;
+
+    private boolean updatesActive = false;
+    // STRIDE CHANGE: keep the step listener registered while the app is backgrounded (used during an active activity).
+    private boolean keepAlive = false;
+
+    @Override
+    public void load() {
+        Context context = getContext();
+        sensorManager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
+        if (sensorManager != null) {
+            stepCounter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER);
+        }
+    }
+
+    @PluginMethod
+    public void getMeasurement(PluginCall call) {
+        if (stepCounter == null) {
+            call.reject("Step counter sensor not available on this device.");
+            return;
+        }
+
+        if (!hasActivityRecognitionPermission()) {
+            call.reject("Activity recognition permission not granted.");
+            return;
+        }
+
+        JSObject result = createMeasurementObject();
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void isAvailable(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("stepCounting", stepCounter != null);
+        // Android doesn't support these advanced features
+        result.put("distance", false);
+        result.put("pace", false);
+        result.put("cadence", false);
+        result.put("floorCounting", false);
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void startMeasurementUpdates(PluginCall call) {
+        if (stepCounter == null) {
+            call.reject("Step counter sensor not available on this device.");
+            return;
+        }
+
+        if (!hasActivityRecognitionPermission()) {
+            call.reject("Activity recognition permission not granted.");
+            return;
+        }
+
+        if (updatesActive) {
+            call.resolve();
+            return;
+        }
+
+        measurementStartTime = System.currentTimeMillis();
+        initialStepCount = -1;
+
+        if (sensorManager != null && sensorManager.registerListener(this, stepCounter, SensorManager.SENSOR_DELAY_UI)) {
+            updatesActive = true;
+            call.resolve();
+        } else {
+            call.reject("Failed to register step counter listener.");
+        }
+    }
+
+    @PluginMethod
+    public void stopMeasurementUpdates(PluginCall call) {
+        if (sensorManager != null && updatesActive) {
+            sensorManager.unregisterListener(this);
+            updatesActive = false;
+            initialStepCount = -1;
+            currentStepCount = 0;
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void requestPermissions(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (getPermissionState("activityRecognition") != PermissionState.GRANTED) {
+                requestPermissionForAlias("activityRecognition", call, "permissionCallback");
+            } else {
+                JSObject result = new JSObject();
+                result.put("activityRecognition", PERMISSION_GRANTED);
+                call.resolve(result);
+            }
+        } else {
+            // No permission needed on older Android versions
+            JSObject result = new JSObject();
+            result.put("activityRecognition", PERMISSION_GRANTED);
+            call.resolve(result);
+        }
+    }
+
+    @PermissionCallback
+    private void permissionCallback(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("activityRecognition", getPermissionState());
+        call.resolve(result);
+    }
+
+    @PluginMethod
+    public void removeAllListeners(PluginCall call) {
+        super.removeAllListeners(call);
+    }
+
+    // STRIDE CHANGE: Android 13+ needs this runtime permission for the "activity is recording" notification to be visible.
+    @PluginMethod
+    public void requestNotificationPermission(PluginCall call) {
+        if (Build.VERSION.SDK_INT < 33 || getPermissionState("notifications") == PermissionState.GRANTED) {
+            JSObject result = new JSObject();
+            result.put("granted", true);
+            call.resolve(result);
+            return;
+        }
+        requestPermissionForAlias("notifications", call, "notificationsCallback");
+    }
+
+    @PermissionCallback
+    private void notificationsCallback(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("granted", getPermissionState("notifications") == PermissionState.GRANTED);
+        call.resolve(result);
+    }
+
+    // STRIDE CHANGE: lets the app keep step events flowing while it is in the background during an activity.
+    @PluginMethod
+    public void setKeepAlive(PluginCall call) {
+        keepAlive = Boolean.TRUE.equals(call.getBoolean("value", false));
+        call.resolve();
+    }
+
+    // STRIDE CHANGE: one-shot read of the absolute since-boot step total. Used on resume and at midnight so the
+    // app never has to wait for the next step to learn how many steps happened while it was away.
+    @PluginMethod
+    public void getTotalSteps(final PluginCall call) {
+        final SensorManager sm = sensorManager;
+        final Sensor sensor = stepCounter;
+        if (sm == null || sensor == null) {
+            call.reject("Step counter not available");
+            return;
+        }
+        if (!hasActivityRecognitionPermission()) {
+            call.reject("Permission not granted");
+            return;
+        }
+        final Handler handler = new Handler(Looper.getMainLooper());
+        final boolean[] finished = { false };
+        final SensorEventListener once = new SensorEventListener() {
+            @Override
+            public void onSensorChanged(SensorEvent event) {
+                if (finished[0]) {
+                    return;
+                }
+                finished[0] = true;
+                sm.unregisterListener(this);
+                handler.removeCallbacksAndMessages(null);
+                lastTotal = (long) event.values[0];
+                JSObject result = new JSObject();
+                result.put("totalSteps", lastTotal);
+                result.put("stale", false);
+                call.resolve(result);
+            }
+
+            @Override
+            public void onAccuracyChanged(Sensor s, int accuracy) {
+                // No-op
+            }
+        };
+        sm.registerListener(once, sensor, SensorManager.SENSOR_DELAY_FASTEST, handler);
+        handler.postDelayed(
+            new Runnable() {
+                @Override
+                public void run() {
+                    if (finished[0]) {
+                        return;
+                    }
+                    finished[0] = true;
+                    sm.unregisterListener(once);
+                    if (lastTotal >= 0) {
+                        JSObject result = new JSObject();
+                        result.put("totalSteps", lastTotal);
+                        result.put("stale", true);
+                        call.resolve(result);
+                    } else {
+                        call.reject("No step reading yet");
+                    }
+                }
+            },
+            2500
+        );
+    }
+
+    @Override
+    public void handleOnPause() {
+        if (sensorManager != null && updatesActive && !keepAlive) {
+            sensorManager.unregisterListener(this);
+        }
+        super.handleOnPause();
+    }
+
+    @Override
+    public void handleOnResume() {
+        super.handleOnResume();
+        if (updatesActive && sensorManager != null && stepCounter != null && hasActivityRecognitionPermission()) {
+            sensorManager.registerListener(this, stepCounter, SensorManager.SENSOR_DELAY_UI);
+        }
+    }
+
+    @Override
+    public void handleOnDestroy() {
+        if (sensorManager != null) {
+            sensorManager.unregisterListener(this);
+        }
+        super.handleOnDestroy();
+    }
+
+    @Override
+    public void onSensorChanged(SensorEvent event) {
+        if (event.sensor.getType() != Sensor.TYPE_STEP_COUNTER) {
+            return;
+        }
+
+        int totalSteps = (int) event.values[0];
+        lastTotal = (long) event.values[0];
+
+        if (initialStepCount == -1) {
+            initialStepCount = totalSteps;
+            currentStepCount = 0;
+        } else {
+            currentStepCount = totalSteps - initialStepCount;
+        }
+
+        JSObject payload = createMeasurementObject();
+        notifyListeners("measurement", payload);
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+        // No-op
+    }
+
+    private JSObject createMeasurementObject() {
+        JSObject measurement = new JSObject();
+        measurement.put("numberOfSteps", currentStepCount);
+        measurement.put("totalSteps", lastTotal);
+        measurement.put("startDate", measurementStartTime);
+        measurement.put("endDate", System.currentTimeMillis());
+        return measurement;
+    }
+
+    private boolean hasActivityRecognitionPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return getPermissionState("activityRecognition") == PermissionState.GRANTED;
+        }
+        return true; // No permission needed on older Android versions
+    }
+
+    private String getPermissionState() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            PermissionState state = getPermissionState("activityRecognition");
+            if (state == null) {
+                return PERMISSION_PROMPT;
+            }
+            switch (state) {
+                case GRANTED:
+                    return PERMISSION_GRANTED;
+                case DENIED:
+                    return PERMISSION_DENIED;
+                default:
+                    return PERMISSION_PROMPT;
+            }
+        }
+        return PERMISSION_GRANTED; // No permission needed on older Android versions
+    }
+
+    @PluginMethod
+    public void getPluginVersion(final PluginCall call) {
+        try {
+            final JSObject ret = new JSObject();
+            ret.put("version", this.pluginVersion);
+            call.resolve(ret);
+        } catch (final Exception e) {
+            call.reject("Could not get plugin version", e);
+        }
+    }
+}
