@@ -33,7 +33,7 @@ plansetup(){const q=S.st.q||(S.st.q={}),D0=q.dist||'Full Marathon',m=D0.startsWi
 planadj:()=>`<main class="ctr" style="padding-top:2vh">${bk('plan')}<div class="lg" style="border-radius:50%"><i class="ci i-run"></i></div><h1>Your plan has been updated!</h1><p class="mu">Example of the weekly review. Real changes appear after a week of logged training.</p><h2 style="text-align:left">What changed</h2>${[['Long run increased from 16 km to 18 km','You completed 100% of last week'],['Recovery day added','Two hard sessions back to back'],['Easy pace adjusted to 6:45 /km','Recent runs were faster than planned']].map(([a,b])=>`<div class="c row" style="text-align:left"><span class="ck on"><i class="ci i-chk"></i></span><div><b>${a}</b><div class="mu">${b}</div></div></div>`).join('')}<button class="btn" onclick="go('plan')">VIEW UPDATED PLAN</button><button class="link" style="margin-top:14px;padding:10px" onclick="go('plan')">Later</button></main>`,
 };
 
-function R(){const ch=R.p!==S.s,y=$('main')?.scrollTop,a=$('#app');if(ch)trans(R.p,S.s,a);R.p=S.s;R0();a.classList.toggle('anim',ch);nativeBars();afterRender();if(!ch&&y)$('main').scrollTop=y;save()}
+function R(){const ch=R.p!==S.s,y=$('main')?.scrollTop,a=$('#app');if(ch)trans(R.p,S.s,a);R.p=S.s;R0();a.classList.toggle('anim',ch);nativeBars();afterRender();if(!ch&&y)$('main').scrollTop=y;save();publishWidgets()}
 function R0(){const d=document.documentElement,e=eff(),h=S.acc.slice(1),c=[0,2,4].map(i=>parseInt(h.slice(i,i+2),16)),l=(.299*c[0]+.587*c[1]+.114*c[2])/255,k=e=='light'&&l>.35?.6:1,up=e=='dark'&&l<.4;d.dataset.theme=e;d.dataset.style=S.style;d.style.setProperty('--rd',S.acc);d.style.setProperty('--on',l>.62?'#111':'#fff');d.style.setProperty('--rt',k<1?'rgb('+c.map(x=>Math.round(x*k)).join(',')+')':up?'rgb('+c.map(x=>Math.round(x+(255-x)*.28)).join(',')+')':S.acc);const sc=V[S.s]?V[S.s]():'',mn=MAIN.includes(S.s);$('#app').innerHTML=(mn?tb():'')+sc+(mn?`<nav>${NAV.map(([k,l])=>`<button class="${S.s==k?'on':''}" onclick="go('${k}','${k}')">${ic(k)}${l}</button>`).join('')}</nav>`:'')}
 // activity tracking (real GPS only)
 let T,run;const pf=s=>isFinite(s)&&s>0?Math.floor(s/60)+':'+String(Math.round(s%60)).padStart(2,'0'):'--:--',tf=s=>[s/3600|0,(s/60|0)%60,s%60].map(x=>String(x).padStart(2,'0')).join(':');
@@ -97,7 +97,7 @@ onbeforeunload=e=>{if(live()){e.preventDefault();e.returnValue=''}};
 /* ===== top bar + account menu ===== */
 const tb=()=>`<div class="tb"><button class="ib" onclick="menu()" aria-label="Account menu">${av(36,S.u.img,S.u.name)}</button><b style="letter-spacing:3px;font-size:13px">STRIDE</b><button class="ib" onclick="go('settings')" aria-label="Settings">${ic('set')}</button></div>`;
 const menu=()=>sheet('Account',`<div class="row" style="padding:6px 0 10px">${av(48,S.u.img,S.u.name)}<div><b>${E(S.u.name)}</b><div class="mu">${E(S.u.email)}</div></div></div>`+[['Profile',"go('profile','profile')"],['Edit Profile',"go('editprof')"],['Settings',"go('settings')"],['Appearance',"go('settings')"],['Account',"go('profile','profile')"],['Logout','logout()']].map(([a,f])=>`<button class="sr ${a=='Logout'?'d':''}" onclick="closeSh();${f}">${a}${ci('cr')}</button>`).join(''));
-function logout(){S.in=0;S.st.rs='idle';go('login')}
+function logout(){S.in=0;S.st.rs='idle';go('login');publishWidgets(true)}
 /* ===== run engine: IDLE / RUNNING / PAUSED / STOPPING / COMPLETED ===== */
 let H={raf:0,t0:0};
 function startRun(){const sh=selShoe(),n=Date.now();run={sec:0,km:0,cal:0,cur:0,paused:false,sp:1,start:n,last:n,real:!!S.live,steps:0,lastTot:S.rawTotal,win:[],sh:sh?sh.id:null,id:'r'+n};S.st.rs='running';clearInterval(T);T=setInterval(tick,500);R()}
@@ -139,7 +139,7 @@ V.login=()=>{const u=S.u,has=u.setup;return `<main><div style="height:6vh"></div
 V.reg=V.login;
 function startProfile(){const n=$('#nm').value.trim();if(!n){toast('Enter your name to continue');return}S.u.name=n;S.u.email=$('#em').value.trim();S.u.setup=1;S.in=1;go('home','home')}
 function newProfile(){sheet('Use a different profile?','<p class="mu">This permanently erases all runs, shoes and settings stored on this device.</p><button class="btn" onclick="Store.reset();location.reload()">ERASE AND START OVER</button><button class="btn o" onclick="closeSh()">CANCEL</button>')}
-const PAR={start:'run',summary:'home',rundetail:'hist',shoe:'shoes',shoes:'profile',editprof:'profile',settings:'profile',dash:'home',plan:'home',plansetup:'plan',plansettings:'plan',planadj:'plan',gear:'profile',reg:'login'};
+const PAR={start:'run',summary:'home',rundetail:'hist',shoe:'shoes',shoes:'profile',editprof:'profile',settings:'profile',dash:'home',plan:'home',plansetup:'plan',plansettings:'plan',planadj:'plan',widgets:'settings',gear:'profile',reg:'login'};
 function androidBack(){if($('#sh')){closeSh();return}if(live()){backRun();return}const s=S.s,p=PAR[s];if(s=='home'||s=='login'||s=='splash'){window.Capacitor?.Plugins?.App?.exitApp();return}go(p||'home',p&&MAIN.includes(p)?p:p?undefined:'home')}
 window.Capacitor?.Plugins?.App?.addListener('backButton',androidBack);
 

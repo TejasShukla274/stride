@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_placeholder">—</string>
+    <string name="widget_steps_name">Stride Steps</string>
+    <string name="widget_steps_desc">Steps today and progress toward your goal</string>
+    <string name="widget_overview_name">Stride Overview</string>
+    <string name="widget_overview_desc">Steps, distance and streak at a glance</string>
+    <string name="widget_graph_name">Stride Week</string>
+    <string name="widget_graph_desc">Steps over the last seven days with your goal line</string>
+</resources>

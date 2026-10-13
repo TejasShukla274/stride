@@ -25,6 +25,7 @@ function onTotal(t) {
   }
   if (S.s === 'start' && live()) updRun();
   else if (S.s === 'home' && !$('#sh') && Date.now() - uiAt > 2000) { uiAt = Date.now(); R(); }
+  publishWidgets();
 }
 async function syncSteps() {
   const P = PED();

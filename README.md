@@ -29,6 +29,16 @@ Offline-first walking and running tracker. Vite web app packaged for Android wit
 - Moving time = time between valid GPS points with speed >= 0.3 m/s (paused time excluded). Pace = moving time / distance. Speed = distance / moving time. Without GPS, moving time equals elapsed active time.
 - Routes are stored per activity (simplified to 3 m tolerance) in `stride.route.<id>`. The unfinished activity is saved every few seconds and offered for recovery after a crash.
 
+## Home-screen widgets (Android)
+Three native widgets: Steps (2x2 ring), Overview (4x2: steps, distance, streak) and Week graph (4x3: seven bars, goal line, tap a bar for that day).
+- Code: `android/app/src/main/java/app/stride/runner/widget/` (Java, `AppWidgetProvider` + `RemoteViews`; the ring and chart are drawn natively into small bitmaps), layouts `res/layout/widget_*.xml`, definitions `res/xml/widget_*_info.xml`.
+- Data: `public/widgets.js` builds one snapshot from the same functions as the dashboard and sends it through the `StrideWidgets` plugin into private SharedPreferences. The snapshot holds numbers only (no name, email or photo). Days with no data are `null`, never zero. Signing out replaces it with a signed-out state.
+- Refresh: when the app records steps (at most every 8 s), changes settings or goals, finishes an activity, goes to the background, and on date/time/timezone changes. Android also redraws every 30 min at most. Android does not guarantee instant updates. If the stored data is from an earlier day the widget shows "Open Stride to sync" instead of old numbers.
+- Taps: stride://home, stride://insights, stride://day/YYYY-MM-DD (the graph widget selects a bar first; tap the footer to open that day).
+- Add one: Stride > Settings > Home-screen widgets (asks Android to pin it), or long-press the home screen > Widgets > Stride.
+- iOS: there is no iOS project here. iOS would need a WidgetKit extension and an App Group; not built.
+- Free: no new dependencies. Only Android platform APIs.
+
 ## Maps and cost
 Routes are recorded and drawn on the phone; nothing is uploaded. The map background downloads tile images from `https://tile.openstreetmap.org` by default. That community server is fine for personal use with attribution, but its policy does not allow heavy or public-app use. For a public release use a provider whose terms allow it (or self-host tiles) and set it in Settings > Route map. Turning the background off still draws the route. Tile requests reveal roughly which area you view to the tile server.
 
@@ -37,7 +47,7 @@ Physical activity (steps), location (only while an activity is recording; no bac
 
 ## What is verified
 - Verified by automated tests with simulated sensors: step bookkeeping, midnight handling, goals and percentages, calendar, date selection, GPS filtering, pace/speed, route storage, history, themes, persistence, recovery.
-- Compiled only against stub classes (not a real Android build): the changed Java in the pedometer plugin.
+- Compiled only (not run, not a real Android build): the changed Java in the pedometer plugin (against stub classes) and the widget Java (against the real Android SDK jar). Widget resources (layouts, XML, vectors) are checked only for well-formed XML.
 - NOT verified on a real phone or in a real Android build: sensor events, background behaviour, foreground-service GPS, permission dialogs, map tiles.
 
 ## Known limits

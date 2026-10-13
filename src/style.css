@@ -85,3 +85,5 @@ nav button.on{color:var(--rt)}svg{fill:none;stroke:currentColor;stroke-width:1.8
 .cmp .stg b{font-size:17px}
 
 .dl{background:none;border:0;border-bottom:2px solid transparent;font-family:inherit;cursor:pointer;min-width:34px;min-height:32px}
+
+.pill{white-space:nowrap}

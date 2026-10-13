@@ -1,7 +1,7 @@
 // End-to-end checks of the real app code in a headless DOM. The Android sensor, GPS and map plugins are SIMULATED
 // here; this proves the app logic, not the hardware. Real-phone behaviour must be checked on a device.
 const { JSDOM } = require('jsdom'); const fs = require('fs');
-const files = ['store', 'track', 'app', 'tracking', 'screens', 'boot'].map(f => fs.readFileSync('dist/' + f + '.js', 'utf8'));
+const files = ['store', 'track', 'app', 'tracking', 'screens', 'widgets', 'boot'].map(f => fs.readFileSync('dist/' + f + '.js', 'utf8'));
 const errs = []; let fails = 0, n = 0;
 const ck = (name, c, extra) => { n++; if (!c) fails++; console.log((c ? 'PASS ' : 'FAIL ') + name + (c ? '' : '  ' + (extra || ''))); };
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -42,11 +42,12 @@ function boot(opt) {
   w.console.error = (...a) => errs.push(a.join(' ')); w.addEventListener('error', e => errs.push(e.message));
   Object.entries(opt.items || {}).forEach(([k, v]) => w.localStorage.setItem(k, v));
   const ped = opt.ped === null ? null : (opt.ped || pedMock('granted')), geo = opt.geo === null ? null : (opt.geo || geoMock(false));
-  w.Capacitor = { Plugins: Object.assign({}, ped && { CapacitorPedometer: ped }, geo && { BackgroundGeolocation: geo }) };
+  const wg = opt.widgets === null ? null : { calls: [], pinned: null, update: async o => { wg.calls.push(JSON.parse(o.json)); }, pin: async o => { wg.pinned = o.type; return { supported: true }; }, status: async () => ({ steps: 1, overview: 0, graph: 2, pinSupported: true, lastUpdate: 0 }) };
+  w.Capacitor = { Plugins: Object.assign({}, ped && { CapacitorPedometer: ped }, geo && { BackgroundGeolocation: geo }, wg && { StrideWidgets: wg }) };
   if (opt.leaflet) w.L = opt.leaflet;
   files.forEach(t => { const s = w.document.createElement('script'); s.textContent = t; w.document.body.append(s); });
   const E = s => w.eval(s);
-  return { w, E, ped, geo, adv: ms => { off += ms; }, now: () => w.Date.now(), dump() { const o = {}; for (let i = 0; i < w.localStorage.length; i++) { const k = w.localStorage.key(i); o[k] = w.localStorage.getItem(k); } return o; } };
+  return { w, E, ped, geo, wg, adv: ms => { off += ms; }, now: () => w.Date.now(), dump() { const o = {}; for (let i = 0; i < w.localStorage.length; i++) { const k = w.localStorage.key(i); o[k] = w.localStorage.getItem(k); } return o; } };
 }
 const text = a => a.w.document.querySelector('#app').textContent;
 
@@ -183,9 +184,49 @@ const text = a => a.w.document.querySelector('#app').textContent;
   const th3 = boot({ items: { 'stride.settings': JSON.stringify({ theme: 'neon', style: 'x', acc: 'banana', units: 'furlongs', pace: 'z' }) } }); await wait(100);
   ck('corrupt saved theme values fall back to the default theme', [th3.E('S.theme'), th3.E('S.style'), th3.E('S.acc'), th3.E('S.units'), th3.E('S.pace')].join() === 'dark,classic,#E10600,km,pace');
 
+  /* ---- home-screen widgets: snapshot published to the native layer ---- */
+  const pw = pedMock('granted'); pw.total = 70000; const wd = boot({ ped: pw }); await wait(150);
+  wd.E("S.u.name='Secret Name';S.u.email='secret@mail.com';S.u.setup=1;S.in=1;go('home','home')"); await wait(30);
+  const k1 = wd.E('Store.dayKey(+ago(1))'), k2 = wd.E('Store.dayKey(+ago(2))'), k3 = wd.E('Store.dayKey(+ago(3))');
+  wd.E("Store._set('stride.steps',{hist:{'" + k1 + "':12000,'" + k2 + "':5000},day:Store.dayKey(),today:0,last:70000,lastT:Date.now()});S.stepsToday=0");
+  wd.ped.emit(70000); wd.E('publishWidgets(true)'); await wait(20);
+  const last = () => wd.wg.calls[wd.wg.calls.length - 1];
+  ck('app publishes a v1 snapshot for today with real dashboard values', last().v === 1 && last().day === wd.E('Store.dayKey()') && last().steps === wd.E('S.stepsToday') && last().goal === 10000 && last().days.length === 7);
+  wd.E("S.stepsToday=9900;publishWidgets(true)"); await wait(10);
+  ck('widget data: 9,900 of 10,000 is 99% and not done', last().pct === 99 && last().done === false);
+  wd.E("S.stepsToday=10000;publishWidgets(true)"); await wait(10);
+  ck('widget data: exactly 10,000 is 100% and done', last().pct === 100 && last().done === true);
+  wd.E("S.stepsToday=15000;publishWidgets(true)"); await wait(10); ck('widget data: over the goal stays 100%', last().pct === 100);
+  const dy = Object.fromEntries(last().days.map(d => [d.k, d]));
+  ck('days with recorded steps carry their numbers and goal result', dy[k1].s === 12000 && dy[k1].done === true && dy[k2].s === 5000 && dy[k2].done === false);
+  ck('a day with no data is null, never a made-up zero', dy[k3].s === null && dy[k3].done === false);
+  ck('today counts as data while the step counter is live', dy[wd.E('Store.dayKey()')].s !== null && dy[wd.E('Store.dayKey()')].today === true);
+  ck('average and best day come only from days with data', last().avg === Math.round((12000 + 5000 + 15000) / 3) && last().best.s === 15000);
+  ck('streak in the widget equals the dashboard streak', last().streak === wd.E('streak()'));
+  ck('snapshot holds no name, email or photo', !JSON.stringify(wd.wg.calls).includes('Secret') && !JSON.stringify(wd.wg.calls).includes('secret@'));
+  wd.E("S.units='mi';S.theme='light';S.style='stardust';S.acc='#48D6B0';publishWidgets(true)"); await wait(10);
+  ck('units, theme, style and accent reach the widgets', last().units === 'mi' && last().theme === 'light' && last().style === 'stardust' && last().acc === '#48D6B0'); wd.E("S.units='km';S.theme='dark';S.style='classic'");
+  wd.E("goalSheet()"); wd.w.document.querySelector('#gs').value = '5000'; wd.w.document.querySelector('#gd').value = '4'; wd.E('saveGoals()'); await wait(10);
+  const dy2 = Object.fromEntries(last().days.map(d => [d.k, d]));
+  ck('changing the goal updates the widget now, and past days keep their old goal', last().goal === 5000 && dy2[k1].g === 10000);
+  const nBefore = wd.wg.calls.length; for (let i = 1; i <= 25; i++) wd.ped.emit(70000 + i * 10);
+  ck('a burst of step events does not flood the widgets', wd.wg.calls.length === nBefore);
+  wd.E('logout()'); await wait(10); ck('signing out replaces widget data with a signed-out state and no personal numbers', last().signedOut === true && last().steps === undefined && last().days === undefined);
+  wd.E("S.in=1;go('home','home')");
+  const link = u => wd.E("routeLink('" + u + "')");
+  ck('widget link to a past day opens that day on the dashboard', link('stride://day/' + k1) === true && wd.E('S.selKey') === k1 && wd.E('S.s') === 'home');
+  ck('widget link to Insights opens Insights', link('stride://insights') === true && wd.E('S.s') === 'insights');
+  ck('bad, future or foreign links are ignored', link('stride://day/2999-01-01') === false && link('http://evil.example/day/' + k1) === false && link('stride://day/../x') === false && link('stride://bogus') === false);
+  wd.E("S.act='Walking';go('start');startRun()"); await wait(60); ck('links never pull you off an active activity', link('stride://home') === false && wd.E('S.s') === 'start'); wd.E('leaveRun()');
+  wd.E("go('settings')"); ck('Settings links to the widgets screen', text(wd).includes('Home-screen widgets'));
+  wd.E("go('widgets');widgetStatus()"); await wait(30); t = text(wd);
+  ck('widgets screen lists the three widgets with add buttons and a manual guide', ['Steps', 'Overview', 'Week graph', 'Long-press', '2 added'].every(x => t.includes(x)) && wd.w.document.querySelectorAll('button.btn.o').length >= 3);
+  wd.E("pinWidget('graph')"); await wait(20); ck('Add to home screen asks Android to pin the chosen widget', wd.wg.pinned === 'graph');
+  const nw = boot({ widgets: null }); await wait(80); nw.E("S.s='widgets';R()"); ck('in a plain browser the widgets screen explains it is Android only', text(nw).includes('Android app only') && nw.w.document.querySelector('button[disabled]') !== null);
+
   /* ---- dashboard customizer + every screen renders ---- */
   th.E("S.dash.Steps=0;go('dash')"); ck('customizer preview reflects hidden widgets', !th.w.document.querySelector('.pvi .hero')); th.E("S.dash.Steps=1;S.lay='Graph Focus';R()"); ck('layout change rearranges the preview', th.w.document.querySelector('.pvi .hero') !== null);
-  const bad = []; ['splash', 'login', 'reg', 'home', 'run', 'start', 'summary', 'rundetail', 'hist', 'insights', 'profile', 'editprof', 'settings', 'shoes', 'shoe', 'dash', 'gear', 'plan', 'plansetup', 'progress'].forEach(k => { try { E("S.s='" + k + "';R()"); } catch (e) { bad.push(k + ': ' + e.message); } });
+  const bad = []; ['splash', 'login', 'reg', 'home', 'run', 'start', 'summary', 'rundetail', 'hist', 'insights', 'profile', 'editprof', 'settings', 'shoes', 'shoe', 'dash', 'gear', 'plan', 'plansetup', 'progress', 'widgets'].forEach(k => { try { E("S.s='" + k + "';R()"); } catch (e) { bad.push(k + ': ' + e.message); } });
   ck('every screen renders (' + bad.join('; ') + ')', bad.length === 0);
   ck('no console errors', errs.length === 0, errs.join(' | '));
   console.log('\n' + (n - fails) + '/' + n + ' checks passed'); process.exit(fails ? 1 : 0);
